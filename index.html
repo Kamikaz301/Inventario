@@ -240,6 +240,11 @@ table.q .n{text-align:right;white-space:nowrap}
         <div class="field"><label>Buscar archivo por nombre</label><input id="sFind" placeholder="Ej. Compras_Varias"></div>
         <button class="btn sec" id="sFindBtn">Buscar</button>
         <div id="sFound" style="margin-top:8px"></div>
+        <p class="hint" style="margin:14px 0 8px">¿No aparece en la búsqueda? Elígelo desde tus carpetas o pega su enlace (el buscador de OneDrive a veces tarda en mostrar archivos).</p>
+        <button class="btn sec" id="sBrowseBtn">Explorar mis carpetas</button>
+        <div id="sBrowse" style="margin-top:8px"></div>
+        <div class="field" style="margin-top:12px"><label>O pega el enlace del archivo (OneDrive → Compartir → Copiar vínculo)</label><input id="sLink" placeholder="https://1drv.ms/x/..." autocomplete="off"></div>
+        <button class="btn sec" id="sLinkBtn">Abrir desde enlace</button>
       </div>
       <div class="card">
         <h2>Conexión</h2>
@@ -609,7 +614,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 'use strict';
 /* ================= Configuración =================
    Si pegas aquí tu Client ID, no tendrás que escribirlo en cada dispositivo. */
-const CLIENT_ID = 'f2ad36f0-adeb-4733-b720-e3d1e81a809c';
+const CLIENT_ID = '';
 /* ================================================= */
 
 const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
@@ -684,28 +689,35 @@ async function graph(path, opts = {}) {
 }
 
 /* ================= Archivo ================= */
+const itemPath = f => f.driveId ? `/drives/${encodeURIComponent(f.driveId)}/items/${encodeURIComponent(f.id)}` : `/me/drive/items/${encodeURIComponent(f.id)}`;
+async function chooseFile(x) {
+  store.set('file', { id: x.id, name: x.name, driveId: x.parentReference?.driveId || null });
+  ['#sFound', '#sBrowse'].forEach(sel => $(sel).innerHTML = '');
+  try { banner('', ''); await loadCloud(); toast('Archivo conectado'); go('inv'); } catch (e) { onError(e); }
+}
 async function loadCloud() {
   const file = store.get('file', null);
   if (!file) { showApp(); go('set'); banner('info', 'Busca y elige tu archivo de Excel en <b>Archivo en OneDrive</b>.'); return; }
   setStatus('busy', 'Cargando…');
-  const r = await graph(`/me/drive/items/${file.id}?select=id,name,cTag,lastModifiedDateTime,@microsoft.graph.downloadUrl`);
-  if (r.status === 404) { store.del('file'); throw new Error('No encontré el archivo en tu OneDrive. Vuelve a buscarlo en Ajustes.'); }
+  const r = await graph(`${itemPath(file)}?select=id,name,cTag,lastModifiedDateTime,parentReference,@microsoft.graph.downloadUrl`);
+  if (r.status === 404 || r.status === 403) { store.del('file'); throw new Error('No encontré el archivo en tu OneDrive. Vuelve a buscarlo en Ajustes.'); }
   if (!r.ok) throw new Error('No se pudo leer el archivo (' + r.status + ').');
   const meta = await r.json();
   const dl = meta['@microsoft.graph.downloadUrl'];
-  const resp = dl ? await fetch(dl) : await graph(`/me/drive/items/${file.id}/content`);
+  const resp = dl ? await fetch(dl) : await graph(`${itemPath(file)}/content`);
   if (!resp.ok) throw new Error('No se pudo descargar el archivo (' + resp.status + ').');
   const bin = await resp.arrayBuffer();
   S.wb = await Workbook.open(bin); S.mode = 'cloud';
-  S.item = { id: meta.id, name: meta.name, cTag: meta.cTag, mod: meta.lastModifiedDateTime };
-  store.set('file', { id: meta.id, name: meta.name });
+  const driveId = meta.parentReference?.driveId || file.driveId || null;
+  S.item = { id: meta.id, name: meta.name, cTag: meta.cTag, mod: meta.lastModifiedDateTime, driveId };
+  store.set('file', { id: meta.id, name: meta.name, driveId });
   setStatus('ok', 'Al día'); afterLoad();
 }
 async function saveCloud() {
   if (S.mode !== 'cloud' || !S.wb.dirty) return;
   setStatus('busy', 'Guardando…');
   try {
-    const m = await graph(`/me/drive/items/${S.item.id}?select=cTag,lastModifiedDateTime`);
+    const m = await graph(`${itemPath(S.item)}?select=cTag,lastModifiedDateTime`);
     const meta = await m.json();
     if (meta.cTag !== S.item.cTag) {
       setStatus('err', 'Sin guardar');
@@ -713,7 +725,7 @@ async function saveCloud() {
       return false;
     }
     const blob = await S.wb.toBlob();
-    const r = await graph(`/me/drive/items/${S.item.id}/content`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, body: blob });
+    const r = await graph(`${itemPath(S.item)}/content`, { method: 'PUT', headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, body: blob });
     if (r.status === 423) throw new Error('El archivo está abierto en Excel y bloqueado. Ciérralo y vuelve a intentar.');
     if (!r.ok) throw new Error('No se pudo guardar (' + r.status + ').');
     const j = await r.json(); S.item.cTag = j.cTag; S.wb.dirty = false;
@@ -1016,12 +1028,45 @@ async function findFiles() {
     const r = await graph(`/me/drive/root/search(q='${encodeURIComponent(q.replace(/'/g, "''"))}')?select=id,name,parentReference,lastModifiedDateTime,file&top=25`);
     const j = await r.json();
     const L = (j.value || []).filter(x => x.file && /\.xlsx$/i.test(x.name));
-    $('#sFound').innerHTML = L.length ? `<div class="sugg">${L.map(x => `<button type="button" data-id="${h(x.id)}" data-name="${h(x.name)}">${h(x.name)}<br><small>${h((x.parentReference?.path || '').replace(/^\/drive\/root:?/, '') || '/')} · ${new Date(x.lastModifiedDateTime).toLocaleDateString('es')}</small></button>`).join('')}</div>` : '<p class="hint">No encontré archivos .xlsx con ese nombre.</p>';
-    $('#sFound').querySelectorAll('button[data-id]').forEach(b => b.onclick = async () => {
-      store.set('file', { id: b.dataset.id, name: b.dataset.name }); $('#sFound').innerHTML = '';
-      try { await loadCloud(); toast('Archivo conectado'); go('inv'); } catch (e) { banner('err', h(e.message)); setStatus('err', 'Error'); }
-    });
+    S.found = L;
+    $('#sFound').innerHTML = L.length ? `<div class="sugg">${L.map((x, i) => `<button type="button" data-i="${i}">${h(x.name)}<br><small>${h((x.parentReference?.path || '').replace(/^\/drive\/root:?/, '') || '/')} · ${new Date(x.lastModifiedDateTime).toLocaleDateString('es')}</small></button>`).join('')}</div>` : '<p class="hint">El buscador de OneDrive no devolvió resultados. Usa <b>Explorar mis carpetas</b> o pega el enlace del archivo.</p>';
+    $('#sFound').querySelectorAll('button[data-i]').forEach(b => b.onclick = () => chooseFile(S.found[+b.dataset.i]));
   } catch (e) { $('#sFound').innerHTML = `<p class="hint">${h(e.message)}</p>`; if (e.needLogin) login(); }
+}
+
+async function browseFolder(folder, trail) {
+  trail = trail || [];
+  const box = $('#sBrowse');
+  box.innerHTML = '<p class="hint">Cargando carpetas…</p>';
+  try {
+    const sel = 'select=id,name,folder,file,parentReference,lastModifiedDateTime&top=200';
+    let url = folder ? `/me/drive/items/${encodeURIComponent(folder.id)}/children?${sel}` : `/me/drive/root/children?${sel}`;
+    const items = [];
+    for (let page = 0; url && page < 10; page++) {
+      const r = await graph(url); if (!r.ok) throw new Error('No se pudo abrir la carpeta (' + r.status + ').');
+      const j = await r.json(); items.push(...(j.value || [])); url = j['@odata.nextLink'] || null;
+    }
+    const dirs = items.filter(x => x.folder).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    const xls = items.filter(x => x.file && /\.xlsx$/i.test(x.name)).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    S.browse = { dirs, xls, trail, folder };
+    const crumbs = ['Mi OneDrive', ...trail.map(t => t.name)].map((n, i) => `<a href="#" data-crumb="${i}">${h(n)}</a>`).join(' › ');
+    box.innerHTML = `<p class="hint" style="margin:0 0 6px">${crumbs}</p><div class="sugg">${dirs.map((d, i) => `<button type="button" data-dir="${i}">📁 ${h(d.name)}</button>`).join('')}${xls.map((x, i) => `<button type="button" data-xls="${i}"><b>${h(x.name)}</b><br><small>Excel · ${new Date(x.lastModifiedDateTime).toLocaleDateString('es')}</small></button>`).join('')}${!dirs.length && !xls.length ? '<button type="button" disabled><small>No hay carpetas ni archivos .xlsx aquí.</small></button>' : ''}</div>`;
+    box.querySelectorAll('[data-dir]').forEach(b => b.onclick = () => { const d = S.browse.dirs[+b.dataset.dir]; browseFolder(d, [...S.browse.trail, d]); });
+    box.querySelectorAll('[data-xls]').forEach(b => b.onclick = () => chooseFile(S.browse.xls[+b.dataset.xls]));
+    box.querySelectorAll('[data-crumb]').forEach(a => a.onclick = ev => { ev.preventDefault(); const i = +a.dataset.crumb; const t = S.browse.trail.slice(0, i); browseFolder(t[t.length - 1] || null, t); });
+  } catch (e) { box.innerHTML = `<p class="hint">${h(e.message)}</p>`; if (e.needLogin) login(); }
+}
+async function openFromLink() {
+  const url = $('#sLink').value.trim();
+  if (!/^https?:\/\//i.test(url)) { toast('Pega un enlace que empiece con https://'); return; }
+  try {
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(url))).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+    const r = await graph(`/shares/u!${b64}/driveItem?select=id,name,file,parentReference`);
+    if (!r.ok) throw new Error(r.status === 403 || r.status === 404 ? 'No pude abrir ese enlace con tu cuenta. Revisa que sea un vínculo de un archivo de tu OneDrive.' : 'No se pudo abrir el enlace (' + r.status + ').');
+    const x = await r.json();
+    if (!/\.xlsx$/i.test(x.name || '')) throw new Error('El enlace no es de un archivo .xlsx.');
+    $('#sLink').value = ''; await chooseFile(x);
+  } catch (e) { toast(e.message, 4500); if (e.needLogin) login(); }
 }
 
 /* ================= Arranque ================= */
@@ -1038,7 +1083,9 @@ function bind() {
   $('#sSave').onclick = () => { store.set('biz', { name: $('#sBiz').value.trim() || 'Mi Tienda', phone: $('#sPhone').value.trim(), foot: $('#sFoot').value.trim() }); toast('Datos guardados'); };
   $('#sClientSave').onclick = () => { store.set('clientId', $('#sClient').value.trim()); toast('ID guardado'); };
   $('#sFindBtn').onclick = findFiles;
-  $('#logoutBtn').onclick = () => { store.del('tok'); store.del('file'); S.wb = null; showWelcome('Sesión cerrada.'); };
+  $('#sBrowseBtn').onclick = () => browseFolder(null, []);
+  $('#sLinkBtn').onclick = openFromLink;
+  $('#logoutBtn').onclick = () => { store.del('tok'); S.wb = null; showWelcome('Sesión cerrada. Al volver a entrar se abrirá el mismo archivo.'); };
   $('#loginBtn').onclick = () => { const w = $('#wClient'); if (w && w.value.trim()) store.set('clientId', w.value.trim()); login('select_account'); };
   $('#localBtn').onclick = () => $('#localFile').click();
   $('#localFile').onchange = e => { const f = e.target.files[0]; if (f) openLocal(f); e.target.value = ''; };
