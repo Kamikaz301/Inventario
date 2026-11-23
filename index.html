@@ -1059,7 +1059,7 @@ table.q .n {
           <div class="card">
             <h2>Conexión</h2>
             <div class="field">
-              <label>ID de la aplicación (Client ID)</label>
+              <label>ID de la aplicación ()</label>
               <input id="sClient" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
             </div>
             <button class="btn sec" id="sClientSave">Guardar ID</button>
@@ -3116,8 +3116,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 /** Versión publicada de la app (ver CHANGELOG.md). Subirla en cada entrega. */
 const APP_VERSION = '1.1.0';
 
-/** Si pegas aquí tu Client ID, no tendrás que escribirlo en cada dispositivo. */
-const CLIENT_ID = '';
+/** Si pegas aquí tu , no tendrás que escribirlo en cada dispositivo. */
+const CLIENT_ID = 'f2ad36f0-adeb-4733-b720-e3d1e81a809c';
 
 const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'openid offline_access User.Read Files.ReadWrite';
@@ -3258,7 +3258,7 @@ const b64url = (buf) =>
 async function login(prompt) {
   if (!clientId()) {
     showWelcome(
-      'Primero pega el <b>Client ID</b> de tu aplicación en Ajustes (o en la configuración del archivo).',
+      'Primero pega el <b></b> de tu aplicación en Ajustes (o en la configuración del archivo).',
       true,
     );
     return;
@@ -3743,7 +3743,7 @@ function showWelcome(msg, isErr) {
     : '';
   if (!clientId()) {
     $('#welcomeText').innerHTML =
-      'Para conectar tu OneDrive, pega el <b>Client ID</b> de tu aplicación:';
+      'Para conectar tu OneDrive, pega el <b></b> de tu aplicación:';
     if (!$('#wClient')) {
       $('#welcomeErr').insertAdjacentHTML(
         'afterend',
